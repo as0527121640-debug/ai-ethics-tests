@@ -12,6 +12,8 @@ export interface ProviderMeta {
   keyUrl?: string;
   keyHint?: string;
   defaultRpm: number;
+  /** Requests per model per day; null when the provider has no daily cap worth planning around. */
+  defaultRpd: number | null;
   /** Suggested model IDs; the user can always type another one. */
   models: { id: string; label: string }[];
   modelPlaceholder?: string;
@@ -24,6 +26,7 @@ export const PROVIDERS: Record<ProviderId, ProviderMeta> = {
     label: 'דמו (ללא מפתח)',
     needsKey: false,
     defaultRpm: 600,
+    defaultRpd: null,
     models: Object.entries(DEMO_STYLES).map(([id, s]) => ({ id, label: `דמו · ${s.he}` })),
     note: 'מודל מדומה שבוחר פעולות לפי כללים פשוטים, לניסיון האתר בלי מפתח. ההתנהגות שלו לא אומרת דבר על מודלים אמיתיים.',
   },
@@ -34,12 +37,13 @@ export const PROVIDERS: Record<ProviderId, ProviderMeta> = {
     keyUrl: 'https://aistudio.google.com/app/apikey',
     keyHint: 'מפתח מ-Google AI Studio. יש מכסה חינמית; המגבלות שלה מופיעות ב-AI Studio.',
     defaultRpm: 10,
+    defaultRpd: 20,
     models: [
+      { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
+      { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite' },
       { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
       { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash' },
       { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash' },
-      { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
-      { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite' },
       { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite' },
       { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro (preview)' },
     ],
@@ -51,6 +55,7 @@ export const PROVIDERS: Record<ProviderId, ProviderMeta> = {
     keyUrl: 'https://console.anthropic.com/settings/keys',
     keyHint: 'מפתח API של Anthropic (בתשלום לפי שימוש).',
     defaultRpm: 50,
+    defaultRpd: null,
     models: [
       { id: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
       { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
@@ -65,6 +70,7 @@ export const PROVIDERS: Record<ProviderId, ProviderMeta> = {
     keyUrl: 'https://platform.openai.com/api-keys',
     keyHint: 'מפתח API של OpenAI (בתשלום לפי שימוש).',
     defaultRpm: 60,
+    defaultRpd: null,
     models: [],
     modelPlaceholder: 'מזהה מודל, למשל gpt-5',
   },
@@ -75,6 +81,7 @@ export const PROVIDERS: Record<ProviderId, ProviderMeta> = {
     keyUrl: 'https://openrouter.ai/keys',
     keyHint: 'מפתח אחד לגישה ל-Llama, DeepSeek, Mistral ומודלים פתוחים נוספים.',
     defaultRpm: 20,
+    defaultRpd: null,
     models: [],
     modelPlaceholder: 'מזהה מודל, למשל meta-llama/llama-4-maverick',
   },

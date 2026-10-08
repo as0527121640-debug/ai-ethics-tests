@@ -275,8 +275,26 @@ describe('runner', () => {
     expect(notices.some((x) => x?.includes('מגבלת הקצב'))).toBe(true);
     expect(res.status).toBe('paused');
     expect(res.statusNote).toContain('המכסה');
+    expect(res.statusNote).toContain('Dove: daily limit');
     expect(res.turns).toHaveLength(1);
     expect(res.turns[0].decisions.find((d) => d.countryId === 'CHN')?.status).toBe('refused');
+  });
+
+  it('pauses the run instead of recording a fake decision when a model stays overloaded', async () => {
+    let n = 0;
+    const decide: DecideFn = async () => {
+      n++;
+      throw new ProviderError('server', 'עומס אצל Google (503)');
+    };
+    const notices: (string | null)[] = [];
+    const run = createRun(config({ countries: config().countries.slice(0, 2) }), PROFILES, GEO);
+    const res = await new SimRunner(run, { decide, geo: GEO, limiter: fast, sleep: async () => {}, onNotice: (x) => notices.push(x), maxServerRetries: 2 }).start();
+    expect(res.status).toBe('paused');
+    expect(res.statusNote).toContain('לא עונה כרגע');
+    expect(res.statusNote).toContain('עומס אצל Google (503)');
+    expect(res.turns).toHaveLength(0);
+    expect(n).toBeGreaterThanOrEqual(3);
+    expect(notices.some((x) => x?.includes('המודל עמוס'))).toBe(true);
   });
 
   it('resumes a paused run where it stopped', async () => {

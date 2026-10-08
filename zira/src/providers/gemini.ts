@@ -40,14 +40,25 @@ async function toError(res: Response): Promise<ProviderError> {
   if (res.status === 429) {
     const retry = details.find((d) => String(d['@type']).endsWith('RetryInfo'));
     const quota = details.find((d) => String(d['@type']).endsWith('QuotaFailure'));
-    const violations = (quota?.violations as { quotaId?: string }[] | undefined) ?? [];
+    const violations = (quota?.violations as { quotaId?: string; quotaValue?: string }[] | undefined) ?? [];
     // Per-day quotas don't come back within a run; per-minute ones do.
-    if (violations.some((v) => /PerDay/i.test(v.quotaId ?? ''))) return new ProviderError('quota', msg);
+    const daily = violations.find((v) => /PerDay/i.test(v.quotaId ?? ''));
+    if (daily) {
+      const hours = Math.ceil((durationMs(retry?.retryDelay) ?? 0) / 3_600_000);
+      const size = daily.quotaValue ? ` (${daily.quotaValue} בקשות ליום)` : '';
+      const back = hours ? ` היא תתחדש בעוד כ-${hours} שעות.` : ' היא מתחדשת בחצות שעון פסיפיק, בסביבות 10:00 בבוקר שעון ישראל.';
+      return new ProviderError('quota', `נגמרה המכסה היומית של המודל${size}.${back}`, durationMs(retry?.retryDelay));
+    }
     return new ProviderError('rate', msg, durationMs(retry?.retryDelay));
   }
+  if (res.status === 503) return new ProviderError('server', 'עומס אצל Google (503)');
   if (res.status >= 500) return new ProviderError('server', msg);
   return new ProviderError('bad_request', msg);
 }
+
+// Google's overload responses sometimes come without CORS headers, so the
+// browser reports a bare network failure instead of the 503.
+const NO_RESPONSE = 'אין תשובה מ-Google (בדרך כלל עומס זמני)';
 
 function modelPath(model: string): string {
   return encodeURIComponent(model.replace(/^models\//, ''));
@@ -70,8 +81,8 @@ export async function geminiDecide(apiKey: string, model: string, req: DecideReq
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify(body),
       });
-    } catch (e) {
-      throw new ProviderError('server', e instanceof Error ? e.message : 'network error');
+    } catch {
+      throw new ProviderError('server', NO_RESPONSE);
     }
   };
 
@@ -106,4 +117,27 @@ export async function listGeminiModels(apiKey: string, fetchImpl: Fetch = fetch)
     .filter((m) => m.supportedGenerationMethods?.includes('generateContent'))
     .map((m) => m.name.replace(/^models\//, ''))
     .filter((n) => n.startsWith('gemini'));
+}
+
+export type ModelHealth = 'ok' | 'busy' | 'missing' | 'limited' | 'error';
+
+/** One tiny request to see whether a model answers this key right now. */
+export async function pingGemini(apiKey: string, model: string, fetchImpl: Fetch = fetch): Promise<{ health: ModelHealth; detail: string }> {
+  let res: Response;
+  try {
+    res = await fetchImpl(`${BASE}/models/${modelPath(model)}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Reply with the word OK.' }] }] }),
+    });
+  } catch {
+    return { health: 'busy', detail: NO_RESPONSE };
+  }
+  if (res.ok) return { health: 'ok', detail: 'עונה' };
+  if (res.status === 404) return { health: 'missing', detail: 'המודל לא זמין למפתח הזה' };
+  const err = await toError(res);
+  if (err.kind === 'server') return { health: 'busy', detail: err.message };
+  if (err.kind === 'quota') return { health: 'limited', detail: 'המכסה היומית של המודל נגמרה' };
+  if (err.kind === 'rate') return { health: 'limited', detail: 'הגעת למגבלת הבקשות לדקה; נסה שוב בעוד רגע' };
+  return { health: 'error', detail: err.message };
 }

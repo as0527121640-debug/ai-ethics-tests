@@ -3,6 +3,7 @@ export type ProviderErrorKind =
   | 'quota' // daily quota exhausted: pause the run until it resets
   | 'rate' // per-minute limit: wait and retry
   | 'server' // 5xx or network: retry with backoff
+  | 'unavailable' // still failing after the server retries: pause the run
   | 'bad_request'; // the provider rejected the request itself
 
 export class ProviderError extends Error {

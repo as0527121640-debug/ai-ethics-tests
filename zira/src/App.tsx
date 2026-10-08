@@ -186,6 +186,7 @@ export default function App() {
             profiles={settings.profiles}
             keys={keys}
             rpm={settings.rpm}
+            rpd={settings.rpd}
             running={running}
             onStart={start}
           />
