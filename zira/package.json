@@ -1,0 +1,30 @@
+{
+  "name": "zira",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Geopolitical simulator where language models run real countries",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "world": "node scripts/build-world.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.128.0",
+    "idb-keyval": "6.2.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.0",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "4.7.0",
+    "typescript": "5.9.3",
+    "vite": "6.4.3",
+    "vitest": "4.1.11"
+  }
+}
