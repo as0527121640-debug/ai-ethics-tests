@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import type { ModelProfile, ProviderId } from '../engine/types';
 import { PROVIDER_ORDER, PROVIDERS } from '../providers';
-import { listGeminiModels } from '../providers/gemini';
+import { listGeminiModels, pingGemini, type ModelHealth } from '../providers/gemini';
 import { nextColor, type Keys, type Settings } from '../store/settings';
-import { Info, Trash } from './icons';
+import { Info, Trash, Warn } from './icons';
 
 interface Props {
   settings: Settings;
@@ -17,20 +17,39 @@ const KEYED: ProviderId[] = PROVIDER_ORDER.filter((p) => PROVIDERS[p].needsKey);
 export function ModelsScreen({ settings, setSettings, keys, setKeys }: Props) {
   const [shown, setShown] = useState<Partial<Record<ProviderId, boolean>>>({});
   const [check, setCheck] = useState<{ state: 'idle' | 'busy' | 'ok' | 'fail'; msg?: string; models?: string[] }>({ state: 'idle' });
+  const [health, setHealth] = useState<Record<string, { health: ModelHealth; detail: string } | 'checking'>>({});
   const { profiles } = settings;
   const setProfiles = (p: ModelProfile[]) => setSettings({ ...settings, profiles: p });
   const patch = (id: string, p: Partial<ModelProfile>) => setProfiles(profiles.map((x) => (x.id === id ? { ...x, ...p } : x)));
+
+  const geminiProfiles = profiles.filter((p) => p.provider === 'gemini' && p.enabled && p.model);
 
   const verifyGemini = async () => {
     const key = keys.gemini;
     if (!key) return;
     setCheck({ state: 'busy' });
+    setHealth({});
+    let models: string[];
     try {
-      const models = await listGeminiModels(key);
-      setCheck({ state: 'ok', models, msg: `המפתח תקין. ${models.length} מודלים של Gemini זמינים לו.` });
+      models = await listGeminiModels(key);
     } catch (e) {
       setCheck({ state: 'fail', msg: e instanceof Error ? e.message : String(e) });
+      return;
     }
+    setCheck({ state: 'ok', models, msg: `המפתח תקין. ${models.length} מודלים של Gemini זמינים לו. בודק אילו מהם עונים עכשיו…` });
+    // A model can be listed and still refuse every call (503 under load), so try each one once.
+    const out: typeof health = {};
+    for (const p of geminiProfiles) {
+      setHealth({ ...out, [p.id]: 'checking' });
+      out[p.id] = models.includes(p.model) ? await pingGemini(key, p.model) : { health: 'missing', detail: 'המודל לא זמין למפתח הזה' };
+      setHealth({ ...out });
+    }
+    const bad = geminiProfiles.filter((p) => out[p.id] !== 'checking' && (out[p.id] as { health: ModelHealth }).health !== 'ok').length;
+    setCheck({
+      state: 'ok',
+      models,
+      msg: bad ? `המפתח תקין, אבל ${bad} מהמודלים ברשימה לא עונים כרגע. כדאי להחליף אותם או לכבות אותם לפני הרצה.` : 'המפתח תקין, וכל מודלי Gemini ברשימה עונים.',
+    });
   };
 
   const addProfile = () => {
@@ -106,6 +125,18 @@ export function ModelsScreen({ settings, setSettings, keys, setKeys }: Props) {
                       onChange={(e) => setSettings({ ...settings, rpm: { ...settings.rpm, [p]: Math.max(1, +e.target.value || 1) } })}
                     />
                   </label>
+                  <label className="inline small ink2">
+                    מכסה יומית לכל מודל
+                    <input
+                      type="number"
+                      min={1}
+                      className="input"
+                      style={{ width: 90, minHeight: 36 }}
+                      placeholder="ללא"
+                      value={settings.rpd[p] ?? ''}
+                      onChange={(e) => setSettings({ ...settings, rpd: { ...settings.rpd, [p]: e.target.value ? Math.max(1, +e.target.value) : null } })}
+                    />
+                  </label>
                   {p === 'gemini' && (
                     <button type="button" className="btn btn-sm" disabled={!keys.gemini || check.state === 'busy'} onClick={verifyGemini}>
                       {check.state === 'busy' ? 'בודק…' : 'בדוק מפתח'}
@@ -113,11 +144,29 @@ export function ModelsScreen({ settings, setSettings, keys, setKeys }: Props) {
                   )}
                 </div>
                 {p === 'gemini' && (check.state === 'ok' || check.state === 'fail') && (
-                  <div className={`notice ${check.state === 'ok' ? 'good' : 'error'}`} role="status">{check.msg}</div>
+                  <div className={`notice ${check.state === 'fail' ? 'error' : Object.values(health).some((h) => h !== 'checking' && h.health !== 'ok') ? 'warn' : 'good'}`} role="status">
+                    {check.msg}
+                  </div>
+                )}
+                {p === 'gemini' && Object.keys(health).length > 0 && (
+                  <ul className="stack-sm small" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                    {geminiProfiles.filter((x) => health[x.id]).map((x) => {
+                      const h = health[x.id];
+                      const ok = h !== 'checking' && h.health === 'ok';
+                      return (
+                        <li key={x.id} className="between" style={{ flexWrap: 'nowrap' }}>
+                          <span className="inline" style={{ gap: 6 }}><span className="swatch sq" style={{ background: x.color }} />{x.label} <span className="mono xsmall muted" dir="ltr">{x.model}</span></span>
+                          <span className="inline xsmall" style={{ gap: 4, fontWeight: 600, color: h === 'checking' ? 'var(--muted)' : ok ? 'var(--good-ink)' : 'var(--warn-ink)' }}>
+                            {h === 'checking' ? 'בודק…' : ok ? '✓ עונה' : <><Warn />{h.detail}</>}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
                 )}
                 {p === 'gemini' && (
                   <p className="xsmall muted">
-                    במכסה החינמית: מגבלת הבקשות לדקה וליום תלויה במודל ומוצגת ב-Google AI Studio. ערך נמוך כאן מאט את הריצה אבל חוסך שגיאות. כשהמכסה היומית נגמרת הריצה נעצרת, ואפשר להמשיך אותה כשהמכסה מתחדשת. בשכבה החינמית Google רשאית להשתמש בתוכן הבקשות לשיפור המוצרים שלה.
+                    במכסה החינמית יש לכל מודל מגבלה לדקה ומגבלה ליום; ל-Gemini 3.8 Flash, למשל, 20 בקשות ביום. הערכים המדויקים מופיעים ב-Google AI Studio. לכל מודל מכסה נפרדת, אז חלוקת המדינות בין כמה מודלים מאפשרת ניסויים גדולים יותר. כשהמכסה היומית נגמרת הריצה נעצרת, ואפשר להמשיך אותה כשהמכסה מתחדשת. "בדוק מפתח" שולח בקשה אחת לכל מודל, והיא נספרת במכסה. בשכבה החינמית Google רשאית להשתמש בתוכן הבקשות לשיפור המוצרים שלה.
                   </p>
                 )}
               </div>

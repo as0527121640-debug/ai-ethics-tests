@@ -11,10 +11,15 @@ export const PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '
 export type Keys = Partial<Record<ProviderId, string>>;
 
 export interface Settings {
+  version: number;
   profiles: ModelProfile[];
   rpm: Record<ProviderId, number>;
+  /** Daily requests per model, used to warn before a run outgrows a free quota. */
+  rpd: Record<ProviderId, number | null>;
   rememberKeys: boolean;
 }
+
+const SETTINGS_VERSION = 2;
 
 function read<T>(storage: () => Storage, key: string): T | undefined {
   try {
@@ -40,7 +45,7 @@ const session = () => window.sessionStorage;
 export const DEFAULT_PROFILES: ModelProfile[] = [
   { id: 'demo-hawk', provider: 'demo', model: 'hawk', label: 'דמו · נץ', color: PALETTE[0], enabled: true },
   { id: 'demo-dove', provider: 'demo', model: 'dove', label: 'דמו · יונה', color: PALETTE[1], enabled: true },
-  { id: 'gemini-flash', provider: 'gemini', model: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', color: PALETTE[2], enabled: true },
+  { id: 'gemini-flash', provider: 'gemini', model: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', color: PALETTE[2], enabled: true },
   { id: 'gemini-lite', provider: 'gemini', model: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite', color: PALETTE[3], enabled: true },
   { id: 'claude-opus', provider: 'anthropic', model: 'claude-opus-5-5', label: 'Claude Opus 5.5', color: PALETTE[4], enabled: false },
 ];
@@ -49,11 +54,27 @@ export function defaultRpm(): Record<ProviderId, number> {
   return Object.fromEntries(PROVIDER_ORDER.map((p) => [p, PROVIDERS[p].defaultRpm])) as Record<ProviderId, number>;
 }
 
+export function defaultRpd(): Record<ProviderId, number | null> {
+  return Object.fromEntries(PROVIDER_ORDER.map((p) => [p, PROVIDERS[p].defaultRpd])) as Record<ProviderId, number | null>;
+}
+
 export function loadSettings(): Settings {
   const s = read<Partial<Settings>>(local, SETTINGS_KEY);
+  let profiles = s?.profiles?.length ? s.profiles : DEFAULT_PROFILES;
+  // v1 shipped Gemini 3.8 Flash as the default, which the free tier keeps
+  // answering with 503. Move the untouched default to 3.5 Flash.
+  if ((s?.version ?? 1) < 2) {
+    profiles = profiles.map((p) =>
+      p.id === 'gemini-flash' && p.model === 'gemini-3.8-flash' && p.label === 'Gemini 3.8 Flash'
+        ? { ...p, model: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' }
+        : p,
+    );
+  }
   return {
-    profiles: s?.profiles?.length ? s.profiles : DEFAULT_PROFILES,
+    version: SETTINGS_VERSION,
+    profiles,
     rpm: { ...defaultRpm(), ...(s?.rpm ?? {}) },
+    rpd: { ...defaultRpd(), ...(s?.rpd ?? {}) },
     rememberKeys: s?.rememberKeys ?? true,
   };
 }

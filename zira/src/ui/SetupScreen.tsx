@@ -42,6 +42,7 @@ interface Props {
   profiles: ModelProfile[];
   keys: Keys;
   rpm: Record<ProviderId, number>;
+  rpd: Record<ProviderId, number | null>;
   running: boolean;
   onStart: () => void;
 }
@@ -58,7 +59,7 @@ function Seg<T extends string | number>({ value, options, onChange, label }: { v
   );
 }
 
-export function SetupScreen({ geo, config, setConfig, profiles, keys, rpm, running, onStart }: Props) {
+export function SetupScreen({ geo, config, setConfig, profiles, keys, rpm, rpd, running, onStart }: Props) {
   const usable = profiles.filter((p) => p.enabled);
   const profileById = useMemo(() => Object.fromEntries(profiles.map((p) => [p.id, p])), [profiles]);
   const [brush, setBrush] = useState<string>(usable[0]?.id ?? '');
@@ -113,6 +114,10 @@ export function SetupScreen({ geo, config, setConfig, profiles, keys, rpm, runni
   }
   const minutesPerTurn = Math.max(0, ...Object.entries(perProvider).map(([p, n]) => n! / (rpm[p as ProviderId] || 1)));
   const eta = minutesPerTurn * config.turns * config.repeats;
+  // Each model has its own daily quota on the free tier; plan against it before starting.
+  const overQuota = used
+    .map((p) => ({ p, calls: config.turns * config.repeats * sel.filter((c) => c.profileId === p.id).length, cap: rpd[p.provider] }))
+    .filter((x): x is { p: ModelProfile; calls: number; cap: number } => x.cap != null && x.calls > x.cap);
 
   const problems: string[] = [];
   if (sel.length < 2) problems.push('צריך לבחור לפחות שתי מדינות.');
@@ -411,6 +416,20 @@ export function SetupScreen({ geo, config, setConfig, profiles, keys, rpm, runni
           </fieldset>
         </div>
       </section>
+
+      {overQuota.length > 0 && (
+        <div className="notice warn" role="status">
+          <Warn />
+          <div className="stack-sm">
+            {overQuota.map(({ p, calls, cap }) => (
+              <span key={p.id}>
+                <strong>{p.label}</strong> צריך {calls} בקשות, והמכסה היומית שלו היא כ-{cap}. הריצה תיעצר באמצע, ואפשר יהיה להמשיך אותה כשהמכסה תתחדש (בסביבות 10:00 בבוקר שעון ישראל).
+              </span>
+            ))}
+            <span className="small">כדי לסיים היום: פחות תורות, פחות מדינות, או חלוקת המדינות בין כמה מודלים, לכל מודל יש מכסה נפרדת.</span>
+          </div>
+        </div>
+      )}
 
       {problems.length > 0 && (
         <div className="notice warn" role="status">

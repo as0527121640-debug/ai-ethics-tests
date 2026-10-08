@@ -41,7 +41,10 @@ export interface RunnerDeps {
   /** Transient status such as "waiting for the rate limit"; null clears it. */
   onNotice?: (notice: string | null) => void;
   sleep?: (ms: number) => Promise<void>;
+  /** Retries for rate limits, which say how long to wait. */
   maxRetries?: number;
+  /** Retries for overloaded or unreachable models before the run pauses. */
+  maxServerRetries?: number;
 }
 
 /**
@@ -129,7 +132,10 @@ export class SimRunner {
       return await this.halt('done');
     } catch (e) {
       if (e instanceof ProviderError && e.kind === 'quota') {
-        return await this.halt('paused', 'המכסה של ספק המודלים נגמרה. אפשר להמשיך את הריצה כשהמכסה תתחדש.');
+        return await this.halt('paused', `${e.message} הריצה נשמרה עד התור האחרון שהושלם; כשהמכסה תתחדש לוחצים "המשך".`);
+      }
+      if (e instanceof ProviderError && e.kind === 'unavailable') {
+        return await this.halt('paused', e.message);
       }
       if (e instanceof ProviderError && e.kind === 'auth') {
         return await this.halt('error', `המפתח נדחה: ${e.message}`);
@@ -226,7 +232,8 @@ export class SimRunner {
         ...(parsed.status === 'invalid' ? { error: 'הפלט לא תאם את המבנה הנדרש', raw: (res.text ?? '').slice(0, 1000) } : {}),
       };
     } catch (e) {
-      if (e instanceof ProviderError && (e.kind === 'quota' || e.kind === 'auth')) throw e;
+      // Run-level problems stop the whole turn rather than becoming a fake "wait".
+      if (e instanceof ProviderError && (e.kind === 'quota' || e.kind === 'auth' || e.kind === 'unavailable')) throw e;
       return { ...base, ...waitOnly, status: 'error', error: e instanceof Error ? e.message : String(e), latencyMs: Date.now() - started };
     }
   }
@@ -235,6 +242,7 @@ export class SimRunner {
     const limiter = this.deps.limiter(profile.provider);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     const maxRetries = this.deps.maxRetries ?? 6;
+    const maxServerRetries = this.deps.maxServerRetries ?? 4;
     for (let attempt = 0; ; attempt++) {
       await limiter.acquire();
       this.run.calls++;
@@ -243,12 +251,18 @@ export class SimRunner {
         if (attempt > 0) this.deps.onNotice?.(null);
         return res;
       } catch (e) {
-        if (!(e instanceof ProviderError) || e.kind === 'auth' || e.kind === 'quota' || e.kind === 'bad_request' || attempt >= maxRetries) {
-          throw e;
+        if (e instanceof ProviderError && e.kind === 'quota') throw new ProviderError('quota', `${profile.label}: ${e.message}`, e.retryAfterMs);
+        if (!(e instanceof ProviderError) || e.kind === 'auth' || e.kind === 'bad_request') throw e;
+        if (e.kind === 'server' && attempt >= maxServerRetries) {
+          throw new ProviderError(
+            'unavailable',
+            `${profile.label} לא עונה כרגע (${e.message}). אפשר ללחוץ "המשך" מאוחר יותר, או להחליף את המודל במסך "מודלים ומפתחות" ולהריץ ניסוי חדש.`,
+          );
         }
+        if (attempt >= maxRetries) throw e;
         const wait = e.retryAfterMs ?? Math.min(60_000, 2000 * 2 ** attempt);
         this.deps.onNotice?.(
-          `${profile.label}: ${e.kind === 'rate' ? 'הגענו למגבלת הקצב של הספק' : 'שגיאה זמנית אצל הספק'}. ממתין ${Math.ceil(wait / 1000)} שניות ומנסה שוב.`,
+          `${profile.label}: ${e.kind === 'rate' ? 'הגענו למגבלת הקצב של הספק' : 'המודל עמוס או לא עונה כרגע'}. ממתין ${Math.ceil(wait / 1000)} שניות ומנסה שוב (ניסיון ${attempt + 1}).`,
         );
         if (e.kind === 'rate') limiter.backOff(wait);
         else await sleep(wait);

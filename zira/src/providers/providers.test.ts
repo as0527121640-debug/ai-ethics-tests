@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ProviderError } from '../engine/errors';
 import type { DecideRequest } from '../engine/runner';
 import { anthropicDecide } from './anthropic';
-import { geminiDecide, listGeminiModels } from './gemini';
+import { geminiDecide, listGeminiModels, pingGemini } from './gemini';
 import { openAICompatDecide } from './openai';
 
 const REQ = {
@@ -64,9 +64,13 @@ describe('gemini', () => {
     expect(err).toMatchObject({ kind: 'rate', retryAfterMs: 37000 });
 
     const perDay = json(429, { error: { message: 'done for today', details: [
-      { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] },
+      { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '20' }] },
+      { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '42696s' },
     ] } });
-    await expect(geminiDecide('K', 'm', REQ, mockFetch([perDay]).fn)).rejects.toMatchObject({ kind: 'quota' });
+    const q = await geminiDecide('K', 'm', REQ, mockFetch([perDay]).fn).catch((e) => e);
+    expect(q).toMatchObject({ kind: 'quota', retryAfterMs: 42696000 });
+    expect(q.message).toContain('20 בקשות ליום');
+    expect(q.message).toContain('12 שעות');
     await expect(geminiDecide('K', 'm', REQ, mockFetch([json(403, { error: { message: 'bad key' } })]).fn)).rejects.toMatchObject({ kind: 'auth' });
     await expect(geminiDecide('K', 'm', REQ, mockFetch([json(503, {})]).fn)).rejects.toMatchObject({ kind: 'server' });
   });
@@ -85,6 +89,20 @@ describe('gemini', () => {
   it('reports safety blocks as refusals', async () => {
     expect(await geminiDecide('K', 'm', REQ, mockFetch([json(200, { promptFeedback: { blockReason: 'SAFETY' } })]).fn)).toMatchObject({ text: null });
     expect(await geminiDecide('K', 'm', REQ, mockFetch([json(200, { candidates: [{ finishReason: 'SAFETY', content: { parts: [] } }] })]).fn)).toMatchObject({ text: null });
+  });
+
+  it('reports overload, including CORS-less failures, as a retryable server error', async () => {
+    await expect(geminiDecide('K', 'm', REQ, mockFetch([json(503, { error: { message: 'high demand', status: 'UNAVAILABLE' } })]).fn)).rejects.toMatchObject({ kind: 'server', message: 'עומס אצל Google (503)' });
+    const offline = (async () => { throw new TypeError('Failed to fetch'); }) as unknown as typeof fetch;
+    await expect(geminiDecide('K', 'm', REQ, offline)).rejects.toMatchObject({ kind: 'server' });
+  });
+
+  it('pings a model to tell whether it answers right now', async () => {
+    expect(await pingGemini('K', 'm', mockFetch([json(200, { candidates: [] })]).fn)).toMatchObject({ health: 'ok' });
+    expect(await pingGemini('K', 'm', mockFetch([json(503, { error: { message: 'high demand' } })]).fn)).toMatchObject({ health: 'busy' });
+    expect(await pingGemini('K', 'm', mockFetch([json(404, { error: { message: 'not found' } })]).fn)).toMatchObject({ health: 'missing' });
+    const perDay = json(429, { error: { message: 'x', details: [{ '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] }] } });
+    expect(await pingGemini('K', 'm', mockFetch([perDay]).fn)).toMatchObject({ health: 'limited' });
   });
 
   it('lists generateContent models for the key check', async () => {
